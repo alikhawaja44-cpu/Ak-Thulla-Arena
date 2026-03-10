@@ -278,7 +278,7 @@ canvas#bg{position:fixed;inset:0;z-index:0;pointer-events:none;}
 .t-mini-ring{position:relative;width:26px;height:26px;}
 .t-mini-ring svg{transform:rotate(-90deg);}
 .t-mini-ring .tbg{fill:none;stroke:rgba(255,255,255,.08);stroke-width:3;}
-.t-mini-ring .tarc{fill:none;stroke:var(--gold);stroke-width:3;stroke-linecap:round;stroke-dasharray:70;transition:stroke-dashoffset 1s linear,stroke .3s;}
+.t-mini-ring .tarc{fill:none;stroke:var(--gold);stroke-width:3;stroke-linecap:round;stroke-dasharray:62.83;transition:stroke-dashoffset 1s linear,stroke .3s;}
 .t-mini-num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'Teko',sans-serif;font-size:.72rem;font-weight:700;color:var(--gold);}
 .turn-secs{font-family:'Teko',sans-serif;font-size:.9rem;font-weight:600;color:var(--gold);}
 #turn-bar.hidden{opacity:0;}
@@ -1072,7 +1072,7 @@ const getActive=()=>G.players.map((_,i)=>i).filter(i=>!G.elim.includes(i));
 
 // ── TRICK FLOW ──
 function beginTrick(){
-  if(animLock)return;
+  animLock=false; // always clear lock at start of new trick
   G.trick=[];G.leadSuit=null;
   selCard=null;
   document.getElementById('play-btn').classList.remove('on');
@@ -1115,21 +1115,26 @@ function executePlay(pi,card){
   selCard=null;
   renderAll();bcast();
   checkElim(pi);
-  const active=getActive();
-  if(active.length<=1){setTimeout(()=>endGame(),900);return;}
+  // Re-fetch active AFTER checkElim (player may have just been eliminated)
+  const activeNow=getActive();
+  if(activeNow.length<=1){setTimeout(()=>endGame(),900);return;}
   if(isThulla){
     animLock=true;
     showThullaSplash(G.players[pi].name,()=>{animLock=false;setTimeout(()=>resolveTrick(),400);});
     return;
   }
-  // Check if all active played
+  // Check if all active players have now played
   const played=G.trick.map(r=>r.pi);
-  if(active.every(p=>played.includes(p))){setTimeout(()=>resolveTrick(),700);return;}
-  // Next player
+  if(activeNow.every(p=>played.includes(p))){setTimeout(()=>resolveTrick(),700);return;}
+  // Find next player: active and hasn't played yet
   let next=(pi+1)%G.players.length;
-  const safeCount=G.players.length*2;let tries=0;
-  while((G.elim.includes(next)||played.includes(next))&&tries++<safeCount)next=(next+1)%G.players.length;
-  if(played.includes(next)){setTimeout(()=>resolveTrick(),600);return;}
+  let tries=0;
+  while(tries++<G.players.length*3){
+    if(!G.elim.includes(next)&&!played.includes(next))break;
+    next=(next+1)%G.players.length;
+  }
+  // Safety valve: if no valid next player found, resolve
+  if(G.elim.includes(next)||played.includes(next)){setTimeout(()=>resolveTrick(),600);return;}
   G.power=next;
   updateLabels();updateTurnBar();
   startTimer(12);
@@ -1144,16 +1149,19 @@ function executePlay(pi,card){
 }
 
 function checkElim(pi){
-  if(G.hands[pi].length===0&&!G.elim.includes(pi)){
-    const isLastThulla=G.trick.some(r=>r.isThulla);
-    if(pi===G.power&&G.waste.length>0&&!isLastThulla){
-      const drawn=G.waste.pop();G.hands[pi].push(drawn);
-      toast((pi===ME.idx?'You draw':''+G.players[pi].name+' draws')+' from waste (has Power!)');
-    } else {
-      G.elim.push(pi);
-      showEscapeAnim(pi);
-      particles(pi===ME.idx?'🎉🎊⭐✨':'✨🎉',8);
-    }
+  if(G.hands[pi].length!==0||G.elim.includes(pi))return;
+  // Power holder who ran out mid-trick (as leader, before trick resolves)
+  // must draw from waste so the trick can continue
+  const isLeader=(G.trick.length===1&&G.trick[0].pi===pi); // first to play this trick
+  const trickHasThulla=G.trick.some(r=>r.isThulla);
+  if(isLeader&&G.waste.length>0&&!trickHasThulla){
+    const drawn=G.waste.pop();
+    G.hands[pi].push(drawn);
+    toast((pi===ME.idx?'You draw':''+G.players[pi].name+' draws')+' from waste (Power holder!)');
+  } else {
+    G.elim.push(pi);
+    showEscapeAnim(pi);
+    particles(pi===ME.idx?'🎉🎊⭐✨':'✨🎉',8);
   }
 }
 
@@ -1167,13 +1175,15 @@ function resolveTrick(){
     const hi=leadPlays.reduce((a,b)=>a.card.v>b.card.v?a:b);
     G.power=hi.pi;
   } else {
-    if(!leadPlays.length){G.power=(G.trick[0].pi+1)%G.players.length;}
-    else{
+    if(!leadPlays.length){
+      G.power=(G.trick[0].pi+1)%G.players.length;
+    } else {
       const hi=leadPlays.reduce((a,b)=>a.card.v>b.card.v?a:b);
       const picker=hi.pi;
       const all=G.trick.map(r=>r.card);
-      G.hands[picker].push(...all);sortH(G.hands[picker]);
+      // Restore picker first (unelim if needed), THEN add cards
       if(G.elim.includes(picker))G.elim=G.elim.filter(p=>p!==picker);
+      G.hands[picker].push(...all);sortH(G.hands[picker]);
       G.power=picker;
       showPickupAnim(picker,all.length);
       particles(picker===ME.idx?'😰💀':'💥😬',6);
@@ -1181,32 +1191,166 @@ function resolveTrick(){
   }
   G.trick=[];G.leadSuit=null;G.round++;
   renderAll();bcast();
+  // Check if game over AFTER all state is resolved
   if(getActive().length<=1){setTimeout(()=>endGame(),1400);return;}
   setTimeout(()=>beginTrick(),hadThulla?1600:1100);
 }
 
-// ── AI ──
+// ══════════════════════════════════════════════════════
+//  SMART AI ENGINE — Full Thulla Strategy
+//
+//  Core Thulla strategy knowledge:
+//  • When LEADING: dump your LOWEST card from your
+//    smallest suit — you want to empty that suit fast
+//    so you can Thulla freely later. Never lead high
+//    unless you're trying to force a pickup on someone.
+//  • When FOLLOWING SUIT: play LOWEST card that won't
+//    make you the highest (and have to pick up). If
+//    you're already going to be highest, play your
+//    single highest to guarantee the Power (so YOU
+//    choose the next lead suit).
+//  • When THULLAING (can't follow): play your highest
+//    card — dump the most dangerous card from your hand.
+//  • DANGER AWARENESS: if another player has very few
+//    cards (≤2), try to force Thullas on them — lead a
+//    suit they probably have and follow aggressively.
+//  • POWER MANAGEMENT: having the Power is sometimes
+//    bad (you must draw from waste if you empty). So
+//    try NOT to be the highest-lead-suit card player
+//    unless you want to control the next round.
+//  • ENDGAME: if YOU have ≤3 cards, play defensively —
+//    protect your hand, don't pick up anything.
+// ══════════════════════════════════════════════════════
+
 let aiTimer=null;
 function schedAI(ms){clearTimeout(aiTimer);aiTimer=setTimeout(()=>aiMove(),ms);}
+
 function aiMove(){
   const pi=G.power;
   if(!G.players[pi]?.isAI||G.elim.includes(pi)||G.phase!=='play')return;
-  const hand=G.hands[pi];if(!hand.length)return;
-  let card;
-  if(!G.leadSuit){
-    // Smart lead: play highest from most-populated suit
-    const bySuit={};SUITS.forEach(s=>bySuit[s]=hand.filter(c=>c.s===s));
-    let best=SUITS[0];
-    SUITS.forEach(s=>{if(bySuit[s].length>bySuit[best].length)best=s;});
-    const pool=bySuit[best].length?bySuit[best]:hand;
-    card=pool.reduce((a,b)=>a.v>b.v?a:b);
-  } else {
-    const match=hand.filter(c=>c.s===G.leadSuit);
-    if(match.length){card=match.reduce((a,b)=>a.v>b.v?a:b);}
-    else{card=hand.reduce((a,b)=>a.v>b.v?a:b);}
-  }
+  const hand=G.hands[pi];
+  if(!hand.length)return;
+
+  const card=G.leadSuit?aiFollowSuit(pi):aiLead(pi);
   setStatus(G.players[pi].name+' plays <b>'+card.r+card.s+'</b>');
   executePlay(pi,card);
+}
+
+// How many cards does each active player have
+function aiHandSizes(){
+  return G.players.map((p,i)=>({i,size:G.hands[i].length,isAI:p.isAI,elim:G.elim.includes(i)}));
+}
+
+// Is this player in danger of losing? (most cards)
+function aiIamInDanger(pi){
+  const active=getActive();
+  if(active.length<=1)return false;
+  const mySize=G.hands[pi].length;
+  const maxOther=Math.max(...active.filter(i=>i!==pi).map(i=>G.hands[i].length));
+  return mySize>=maxOther;
+}
+
+// Who is close to escaping (fewest cards)?
+function aiVulnerablePlayers(){
+  return getActive()
+    .filter(i=>!G.players[i].isAI||i!==G.power) // others
+    .filter(i=>G.hands[i].length<=3);
+}
+
+// ── LEADING strategy ──
+function aiLead(pi){
+  const hand=G.hands[pi];
+  const mySize=hand.length;
+  const active=getActive();
+  const endangered=aiIamInDanger(pi);
+
+  // Group hand by suit
+  const bySuit={};
+  SUITS.forEach(s=>{bySuit[s]=hand.filter(c=>c.s===s);});
+
+  // Suits I have
+  const haveSuits=SUITS.filter(s=>bySuit[s].length>0);
+
+  // ENDGAME (≤3 cards): play lowest card from smallest suit to escape fast
+  if(mySize<=3){
+    // Find suit with fewest cards — dump lowest from it
+    haveSuits.sort((a,b)=>bySuit[a].length-bySuit[b].length);
+    const tgtSuit=haveSuits[0];
+    return bySuit[tgtSuit].reduce((a,b)=>a.v<b.v?a:b);
+  }
+
+  // DANGER MODE: I have many cards — try to cause Thullas
+  // Lead a suit where at least one player likely has NO cards
+  // (we can't see their hand, so use probability: lead suits we have MANY of
+  //  — if we have 6 spades, others are less likely to have spades)
+  if(endangered&&mySize>6){
+    // Lead highest card from suit we have most of (opponent likely has none)
+    haveSuits.sort((a,b)=>bySuit[b].length-bySuit[a].length);
+    const bigSuit=haveSuits[0];
+    // Play HIGHEST from that suit to maximize chance we stay highest (get Power)
+    // so we can keep leading the same suit and forcing Thullas
+    return bySuit[bigSuit].reduce((a,b)=>a.v>b.v?a:b);
+  }
+
+  // NORMAL play: lead LOWEST card from the suit with FEWEST cards
+  // Goal: empty that suit from our hand so we can Thulla freely
+  haveSuits.sort((a,b)=>bySuit[a].length-bySuit[b].length);
+  const targetSuit=haveSuits[0];
+  const pool=bySuit[targetSuit];
+
+  // From that suit, play the lowest — don't waste high cards on leading
+  return pool.reduce((a,b)=>a.v<b.v?a:b);
+}
+
+// ── FOLLOWING SUIT strategy ──
+function aiFollowSuit(pi){
+  const hand=G.hands[pi];
+  const lead=G.leadSuit;
+  const mySize=hand.length;
+  const matching=hand.filter(c=>c.s===lead);
+
+  // MUST THULLA — no matching suit
+  if(!matching.length){
+    // Dump highest card from our hand — get rid of dangerous high cards
+    // But if we're close to escaping, dump lowest instead to preserve hand
+    if(mySize<=3){
+      return hand.reduce((a,b)=>a.v<b.v?a:b);
+    }
+    return hand.reduce((a,b)=>a.v>b.v?a:b);
+  }
+
+  // Has matching suit — must follow
+  // Find what's currently the highest lead-suit card on table
+  const tableLeadCards=G.trick.filter(r=>r.card.s===lead);
+  const currentHighVal=tableLeadCards.length
+    ?Math.max(...tableLeadCards.map(r=>r.card.v))
+    :0;
+
+  // Cards that would beat current high (making US the new highest = potential picker)
+  const beaters=matching.filter(c=>c.v>currentHighVal);
+  // Cards that stay safely below
+  const safe=matching.filter(c=>c.v<=currentHighVal);
+
+  // Count remaining players who still need to play this trick
+  const played=G.trick.map(r=>r.pi);
+  const stillToPlay=getActive().filter(p=>!played.includes(p)&&p!==pi);
+
+  // SAFE play: play something below the current highest
+  if(safe.length){
+    // Play highest of safe cards — maximize value dumped without becoming the highest
+    return safe.reduce((a,b)=>a.v>b.v?a:b);
+  }
+
+  // ALL our matching cards beat current high — we WILL be the highest
+  // Strategy: if more players still to play, they might beat us → play LOWEST beater
+  //           so we don't waste our high cards and might get beaten
+  if(stillToPlay.length>0){
+    return beaters.reduce((a,b)=>a.v<b.v?a:b);
+  }
+
+  // We're last to play and will definitely pick up — play HIGHEST
+  // to at least guarantee Power next round (lead the suit WE want)
+  return beaters.reduce((a,b)=>a.v>b.v?a:b);
 }
 
 // ── TIMER ──
@@ -1375,6 +1519,7 @@ function sortHand(){
 
 // ── END GAME ──
 function endGame(){
+  animLock=false; // always release lock
   G.phase='end';stopTimer();clearTimeout(aiTimer);
   const active=getActive();
   let bhabhi=active.length===1?active[0]:G.players.map((_,i)=>i).reduce((a,b)=>G.hands[a].length>G.hands[b].length?a:b);
