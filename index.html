@@ -330,6 +330,58 @@ canvas#bg{position:fixed;inset:0;z-index:0;pointer-events:none;}
 
 @media(max-height:420px){:root{--card-w:42px;--card-h:62px;--hdr:36px;--strip:26px;}.tsword{font-size:5rem;}.sav{width:40px;height:40px;font-size:1.1rem;}}
 @media(max-height:360px){:root{--card-w:36px;--card-h:54px;}}
+
+/* ═══ VOICE CHAT ═══ */
+#vc-bar{
+  position:absolute;top:calc(var(--hdr) + var(--strip) + 4px);right:8px;
+  display:flex;flex-direction:column;gap:5px;z-index:70;
+}
+#vc-btn{
+  width:40px;height:40px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font-size:1.1rem;
+  cursor:pointer;transition:all .2s;
+  background:rgba(0,200,80,.15);border:1.5px solid rgba(0,200,80,.35);
+  box-shadow:0 3px 12px rgba(0,0,0,.5);
+}
+#vc-btn.muted{background:rgba(255,40,60,.13);border-color:rgba(255,40,60,.4);}
+#vc-btn.off{background:rgba(255,255,255,.07);border-color:rgba(255,255,255,.12);}
+#vc-btn:hover{transform:scale(1.1);}
+#vc-status{
+  background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.1);
+  border-radius:10px;padding:4px 8px;font-family:'Rajdhani',sans-serif;
+  font-size:.58rem;font-weight:700;letter-spacing:.06em;color:rgba(255,255,255,.5);
+  text-align:center;white-space:nowrap;backdrop-filter:blur(8px);
+}
+/* Speaking ring on seat avatar */
+.sav.speaking{
+  box-shadow:0 0 0 3px rgba(0,220,80,.5),0 0 14px rgba(0,220,80,.3) !important;
+  border-color:rgba(0,220,80,.8) !important;
+}
+/* Speaking ring on MY avatar */
+.myav.speaking{
+  box-shadow:0 0 0 3px rgba(0,220,80,.5),0 0 14px rgba(0,220,80,.3) !important;
+  border-color:rgba(0,220,80,.8) !important;
+}
+/* Mic icon pulsing when speaking */
+@keyframes micPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.2)}}
+#vc-btn.speaking{animation:micPulse .6s ease-in-out infinite;border-color:rgba(0,220,80,.8);background:rgba(0,220,80,.18);}
+/* Voice panel (participant list) */
+#vc-panel{
+  position:absolute;top:calc(var(--hdr) + var(--strip) + 4px);right:56px;
+  width:170px;
+  background:rgba(4,8,18,.96);border:1px solid rgba(255,255,255,.1);
+  border-radius:13px;padding:10px;display:none;z-index:71;
+  box-shadow:0 8px 28px rgba(0,0,0,.7);backdrop-filter:blur(12px);
+  animation:popin .25s cubic-bezier(.34,1.56,.64,1) both;
+}
+#vc-panel.on{display:block;}
+.vc-title{font-family:'Teko',sans-serif;font-size:.82rem;font-weight:700;letter-spacing:.08em;color:rgba(0,220,80,.8);margin-bottom:8px;display:flex;align-items:center;gap:5px;}
+.vc-row{display:flex;align-items:center;gap:7px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.05);}
+.vc-row:last-child{border-bottom:none;}
+.vc-av{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.7rem;background:rgba(255,255,255,.09);flex-shrink:0;}
+.vc-av.sp{background:rgba(0,220,80,.15);box-shadow:0 0 0 2px rgba(0,220,80,.4);}
+.vc-nm{font-size:.72rem;font-weight:700;font-family:'Rajdhani',sans-serif;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.vc-mic{font-size:.8rem;flex-shrink:0;}
 </style>
 </head>
 <body>
@@ -472,6 +524,21 @@ canvas#bg{position:fixed;inset:0;z-index:0;pointer-events:none;}
   </div>
 </div>
 
+
+  <!-- VOICE CHAT BAR -->
+  <div id="vc-bar">
+    <div id="vc-btn" class="off" onclick="vcBtnClick()" title="Voice Chat — tap to open, double-tap to mute">🎙️</div>
+    <div id="vc-status">VOICE OFF</div>
+  </div>
+  <div id="vc-panel">
+    <div class="vc-title">🎙️ VOICE CHAT</div>
+    <div id="vc-list"></div>
+    <div style="margin-top:8px;display:flex;flex-direction:column;gap:5px;">
+      <button class="gbtn b" style="font-size:.65rem;padding:6px 8px;" onclick="startVoice()">Join Voice</button>
+      <button class="gbtn gh" style="font-size:.65rem;padding:6px 8px;" onclick="leaveVoice()">Leave Voice</button>
+    </div>
+  </div>
+
 <!-- THULLA SPLASH -->
 <div id="thullaspl">
   <div class="tswrap">
@@ -582,7 +649,7 @@ function initG(players){
 function peerInit(id,onReady){
   if(peer&&!peer.destroyed){try{peer.destroy();}catch(e){}}
   peer=id?new Peer(PP+id,POPTS):new Peer(POPTS);
-  peer.on('open',rid=>{if(onReady)onReady(rid);});
+  peer.on('open',rid=>{myVcPeerId=rid;if(onReady)onReady(rid);});
   peer.on('error',e=>{
     const msg=String(e.message||e.type||'');
     if(msg.includes('unavailable')||msg.includes('taken')){ROOM.code=genCode();document.getElementById('w-code').textContent='...';peerInit(ROOM.code,()=>{document.getElementById('w-code').textContent=ROOM.code;setWS('Room ready! Share code 🎉');});}
@@ -600,6 +667,8 @@ function peerInit(id,onReady){
       conn.on('data',m=>{
         if(m.t==='play'){const c=G?.hands[m.pi]?.find(x=>x.s===m.card.s&&x.r===m.card.r);if(c)executePlay(m.pi,c);}
         if(m.t==='emote'){floatEmote(m.pi,m.em);guestConns.forEach(g=>{if(g.conn!==conn)try{g.conn.send(m);}catch(ee){}});}
+        if(m.t==='vc-join'||m.t==='vc-leave'){handleVcMsg(m,idx);// relay to other guests
+          guestConns.forEach(g=>{if(g.conn!==conn)try{g.conn.send(m);}catch(ee){}});}
       });
       conn.on('close',()=>{guestConns=guestConns.filter(g=>g.conn!==conn);toast(nm+' left.');broadcastLobby();});
     });
@@ -627,11 +696,268 @@ function joinRoom(){
     let ok=false;
     hostConn.on('open',()=>{ok=true;setWS('Connected! Waiting for host...');});
     hostConn.on('data',m=>{
-      if(m.t==='full'){toast('Room is full!');showScr('s-home');return;}
+      if(m.t==='full'){toast('Room is full!');
+// ════════════════════════════════════════════
+//  VOICE CHAT — PeerJS Media (WebRTC Audio)
+//  • Host calls each guest when they join
+//  • Guests auto-answer all incoming calls
+//  • AudioContext VAD detects speaking → shows ring
+//  • Mute/unmute local mic
+//  • Works cross-device via STUN/TURN
+// ════════════════════════════════════════════
+
+let localStream=null;       // our mic stream
+let vcActive=false;         // voice joined?
+let vcMuted=false;          // mic muted?
+let vcCalls=[];             // active PeerJS Call objects
+let vcPanelOpen=false;
+let vcSpeaking={};          // {peerId: bool}
+let vcPeerMap={};           // {peerIdx: peerRemoteId}  — host only
+let myVcPeerId=null;        // our peer's id (available after peerInit)
+let vadContexts=[];         // AudioContext objects for VAD cleanup
+
+// Called after peerInit resolves
+function onPeerReady(rid){
+  myVcPeerId=rid;
+  // Listen for incoming voice calls (guests receive from host)
+  if(peer){
+    peer.on('call',call=>{
+      if(!localStream){toast('📞 Incoming voice — tap 🎙️ to join!');return;}
+      call.answer(localStream);
+      call.on('stream',remoteStream=>attachRemoteAudio(call.peer,remoteStream));
+      call.on('close',()=>removeVcAudio(call.peer));
+      call.on('error',()=>removeVcAudio(call.peer));
+      vcCalls.push(call);
+    });
+  }
+}
+
+// Start voice: get mic, then call/answer everyone
+async function startVoice(){
+  if(vcActive){toast('Already in voice chat!');return;}
+  if(!ROOM.online){toast('Voice chat is for online multiplayer rooms.');return;}
+  if(!peer||peer.destroyed){toast('Not connected to room yet.');return;}
+  try{
+    localStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+  }catch(e){
+    toast('Mic access denied. Allow microphone in browser settings.');return;
+  }
+  vcActive=true;vcMuted=false;
+  updateVcBtn();
+  setupVAD(localStream,'me');
+  
+  // Register our voice peer ID with others via data channel
+  const vcMsg={t:'vc-join',peerId:peer.id,pi:ME.idx};
+  if(ROOM.host){
+    // Host broadcasts to all guests
+    broadcastData(vcMsg);
+    // Also call any guests who already joined voice
+    Object.entries(vcPeerMap).forEach(([idx,pid])=>{
+      callPeer(pid);
+    });
+  } else {
+    // Guest tells host
+    hostConn.send(vcMsg);
+  }
+  
+  // Start listening for incoming calls (if not already set up)
+  if(peer){
+    peer.removeAllListeners('call');
+    peer.on('call',call=>{
+      call.answer(localStream);
+      call.on('stream',remoteStream=>{
+        attachRemoteAudio(call.peer,remoteStream);
+        setupVAD(remoteStream,call.peer);
+      });
+      call.on('close',()=>removeVcAudio(call.peer));
+      call.on('error',()=>removeVcAudio(call.peer));
+      vcCalls.push(call);
+      updateVcPanel();
+    });
+  }
+  updateVcPanel();
+  toast('🎙️ Voice chat on! You can talk now.');
+}
+
+function callPeer(remotePeerId){
+  if(!localStream||!peer)return;
+  try{
+    const call=peer.call(remotePeerId,localStream);
+    call.on('stream',remoteStream=>{
+      attachRemoteAudio(remotePeerId,remoteStream);
+      setupVAD(remoteStream,remotePeerId);
+    });
+    call.on('close',()=>removeVcAudio(remotePeerId));
+    call.on('error',()=>removeVcAudio(remotePeerId));
+    vcCalls.push(call);
+    updateVcPanel();
+  }catch(e){console.warn('callPeer error:',e);}
+}
+
+// Attach remote audio stream to a hidden <audio> element
+function attachRemoteAudio(pid,stream){
+  let el=document.getElementById('vcaudio-'+pid.replace(/[^a-z0-9]/gi,'-'));
+  if(!el){el=document.createElement('audio');el.id='vcaudio-'+pid.replace(/[^a-z0-9]/gi,'-');el.autoplay=true;el.style.display='none';document.body.appendChild(el);}
+  el.srcObject=stream;
+  updateVcPanel();
+}
+function removeVcAudio(pid){
+  const el=document.getElementById('vcaudio-'+pid.replace(/[^a-z0-9]/gi,'-'));
+  if(el)el.remove();
+  vcCalls=vcCalls.filter(c=>c.peer!==pid);
+  delete vcSpeaking[pid];
+  updateVcPanel();
+}
+
+// Voice Activity Detection — lights up avatar when speaking
+function setupVAD(stream,id){
+  try{
+    const ctx=new(window.AudioContext||window.webkitAudioContext)();
+    const src=ctx.createMediaStreamSource(stream);
+    const analyser=ctx.createAnalyser();analyser.fftSize=512;
+    src.connect(analyser);
+    const buf=new Uint8Array(analyser.frequencyBinCount);
+    let isSpeaking=false;let silenceCount=0;
+    const check=()=>{
+      if(!vcActive){ctx.close();return;}
+      analyser.getByteFrequencyData(buf);
+      const vol=buf.reduce((a,b)=>a+b,0)/buf.length;
+      const nowSpeaking=vol>18;
+      if(nowSpeaking!==isSpeaking||silenceCount>8){
+        isSpeaking=nowSpeaking;
+        if(!nowSpeaking)silenceCount++;else silenceCount=0;
+        vcSpeaking[id]=nowSpeaking;
+        updateSpeakingUI();
+      }
+      requestAnimationFrame(check);
+    };
+    check();
+    vadContexts.push(ctx);
+  }catch(e){}
+}
+
+function updateSpeakingUI(){
+  // My avatar
+  const myavEl=document.getElementById('my-av');
+  if(myavEl)myavEl.classList.toggle('speaking',!vcMuted&&!!vcSpeaking['me']);
+  // VC button pulse
+  const btn=document.getElementById('vc-btn');
+  if(btn)btn.classList.toggle('speaking',!vcMuted&&!!vcSpeaking['me']);
+  // Opponent seats — map by peerId
+  // We track vcSpeaking by peerId key; map back to seat index via vcPeerMap
+  Object.entries(vcPeerMap).forEach(([idx,pid])=>{
+    const av=document.getElementById('sav'+idx);
+    if(av)av.classList.toggle('speaking',!!vcSpeaking[pid]);
+  });
+  updateVcPanel();
+}
+
+function toggleMute(){
+  if(!vcActive||!localStream)return;
+  vcMuted=!vcMuted;
+  localStream.getAudioTracks().forEach(t=>t.enabled=!vcMuted);
+  updateVcBtn();
+  toast(vcMuted?'🔇 Mic muted':'🎙️ Mic unmuted');
+}
+
+function leaveVoice(){
+  vcActive=false;vcMuted=false;
+  vcCalls.forEach(c=>{try{c.close();}catch(e){}});vcCalls=[];
+  if(localStream){localStream.getTracks().forEach(t=>t.stop());localStream=null;}
+  vadContexts.forEach(ctx=>{try{ctx.close();}catch(e){}});vadContexts=[];
+  vcSpeaking={};
+  // Remove all audio elements
+  document.querySelectorAll('[id^="vcaudio-"]').forEach(el=>el.remove());
+  updateVcBtn();updateVcPanel();
+  // Notify others
+  const vcMsg={t:'vc-leave',pi:ME.idx};
+  if(ROOM.host)broadcastData(vcMsg);
+  else if(hostConn)hostConn.send(vcMsg);
+  toast('Voice chat left.');
+}
+
+function updateVcBtn(){
+  const btn=document.getElementById('vc-btn');
+  const st=document.getElementById('vc-status');
+  if(!btn)return;
+  if(!vcActive){btn.className='off';btn.innerHTML='🎙️';if(st)st.textContent='VOICE OFF';}
+  else if(vcMuted){btn.className='muted';btn.innerHTML='🔇';if(st)st.textContent='MUTED';}
+  else{btn.className='';btn.innerHTML='🎙️';if(st)st.textContent='VOICE ON';}
+}
+
+function toggleVcPanel(){
+  vcPanelOpen=!vcPanelOpen;
+  document.getElementById('vc-panel').classList.toggle('on',vcPanelOpen);
+  if(vcPanelOpen)updateVcPanel();
+}
+
+function updateVcPanel(){
+  const list=document.getElementById('vc-list');if(!list)return;
+  if(!G){list.innerHTML='<div style="font-size:.68rem;color:rgba(255,255,255,.3);text-align:center;padding:4px">Start a game first</div>';return;}
+  let html='';
+  G.players.forEach((p,i)=>{
+    const isMe=i===ME.idx;
+    const pid=isMe?'me':Object.entries(vcPeerMap).find(([idx])=>+idx===i)?.[1];
+    const sp=pid?!!vcSpeaking[pid]:false;
+    const inVc=isMe?vcActive:!!pid&&vcCalls.some(c=>c.peer===pid);
+    const micIcon=isMe?(vcMuted?'🔇':'🎙️'):(inVc?'🎙️':'➖');
+    html+=`<div class="vc-row"><div class="vc-av${sp?' sp':''}">${p.av}</div><div class="vc-nm">${esc(p.name+(isMe?' (You)':''))}</div><div class="vc-mic">${inVc?micIcon:'🔕'}</div></div>`;
+  });
+  list.innerHTML=html;
+}
+
+// Mute button in vc panel (double-tap vc-btn)
+document.addEventListener('DOMContentLoaded',()=>{});
+function vcBtnClick(){
+  if(vcActive){
+    // Single tap = toggle mute when in voice
+    toggleMute();
+    // Also show panel
+    if(!vcPanelOpen){vcPanelOpen=true;document.getElementById('vc-panel').classList.add('on');updateVcPanel();}
+  } else {
+    toggleVcPanel();
+  }
+}
+let vcBtnTap=0;
+
+// Handle vc-join / vc-leave messages from peers
+function handleVcMsg(m,fromPi){
+  if(m.t==='vc-join'){
+    const pi=m.pi!==undefined?m.pi:fromPi;
+    const pid=m.peerId;
+    if(!pid||pi===ME.idx)return; // ignore our own message echoed back
+    vcPeerMap[pi]=pid;
+    // If we're in voice and haven't called them yet, call them
+    if(vcActive&&localStream&&!vcCalls.some(c=>c.peer===pid)){
+      setTimeout(()=>callPeer(pid),800);
+    }
+    updateVcPanel();
+    if(G?.players[pi])toast((G.players[pi].name||'Someone')+' joined voice! 🎙️');
+  }
+  if(m.t==='vc-leave'){
+    const pi=m.pi!==undefined?m.pi:fromPi;
+    const pid=vcPeerMap[pi];
+    if(pid){removeVcAudio(pid);delete vcPeerMap[pi];}
+    updateVcPanel();
+    if(G?.players[pi])toast((G.players[pi].name||'Someone')+' left voice.');
+  }
+}
+
+// Helper to broadcast data to all guests (host only)
+function broadcastData(msg){
+  guestConns.forEach(g=>{try{g.conn.send(msg);}catch(e){}});
+}
+
+// Right-click or long-press vc-btn = toggle mute
+document.getElementById('vc-btn').addEventListener('contextmenu',e=>{e.preventDefault();toggleMute();});
+document.getElementById('vc-btn').addEventListener('dblclick',()=>toggleMute());
+
+showScr('s-home');return;}
       if(m.t==='welcome'){ME.idx=m.idx;ROOM.max=m.max;ROOM.players=m.players;renderWait(m.players);setWS('Waiting for host... ('+m.players.length+'/'+m.max+')');}
       if(m.t==='lobby'){ROOM.players=m.players;renderWait(m.players);}
       if(m.t==='gs'){G=JSON.parse(JSON.stringify(m.state));if(!document.getElementById('s-game').classList.contains('on')){showTable();setTimeout(()=>beginTrick(),700);}else renderAll();}
       if(m.t==='emote')floatEmote(m.pi,m.em);
+      if(m.t==='vc-join'||m.t==='vc-leave')handleVcMsg(m);
     });
     hostConn.on('close',()=>toast('Lost connection to host.'));
     setTimeout(()=>{if(!ok)toast('Could not find room "'+raw+'"');},9000);
@@ -650,7 +976,7 @@ function hostStart(){
   while(ROOM.players.length<ROOM.max)ROOM.players.push({name:AI_NAMES[ROOM.players.length-1]||'Bot',av:AVATARS[ROOM.players.length%AVATARS.length],isAI:true});
   initG(ROOM.players);bcast();showTable();setTimeout(()=>beginTrick(),700);
 }
-function leaveWait(){if(peer&&!peer.destroyed){try{peer.destroy();}catch(e){}}peer=null;hostConn=null;guestConns=[];showScr('s-home');}
+function leaveWait(){leaveVoice();if(peer&&!peer.destroyed){try{peer.destroy();}catch(e){}}peer=null;hostConn=null;guestConns=[];showScr('s-home');}
 function setWS(m){const e=document.getElementById('w-st');if(e)e.textContent=m;}
 
 // LANDSCAPE SEAT POSITIONS — Thulla Masters style
@@ -1004,7 +1330,7 @@ function endGame(){
   setTimeout(()=>document.getElementById('endm').classList.add('on'),isMe?1800:600);
 }
 function replayGame(){document.getElementById('endm').classList.remove('on');if(ROOM.online&&!ROOM.host){gotoHome();return;}const pl=G.players.map(p=>({...p}));initG(pl);buildSeats();renderAll();setTimeout(()=>beginTrick(),600);}
-function gotoHome(){document.getElementById('endm').classList.remove('on');document.getElementById('s-game').classList.remove('on');clearTimeout(aiTimer);stopTimer();if(peer&&!peer.destroyed){try{peer.destroy();}catch(e){}}peer=null;hostConn=null;guestConns=[];showScr('s-home');}
+function gotoHome(){document.getElementById('endm').classList.remove('on');document.getElementById('s-game').classList.remove('on');clearTimeout(aiTimer);stopTimer();leaveVoice();if(peer&&!peer.destroyed){try{peer.destroy();}catch(e){}}peer=null;hostConn=null;guestConns=[];showScr('s-home');}
 
 // WAITING ROOM
 function renderWait(players){
